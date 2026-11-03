@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 import torch
 import onnxruntime
+from lib import face_pipeline as fp
 from lib.schemas import EmbeddingRecord, FaceDetection, PredictResult, AlignedFace
 from lib.storage.base import EmbeddingStoreProtocol
 import os 
@@ -30,6 +31,7 @@ class FaceService:
         det_input_size: int = 640,
         min_face_size: int = 20,
         align_margin: float = 0.5,
+        det_pad_frac: float = 0.5,
     ) -> None:
         self.store = store
         self.similarity_metric = similarity_metric
@@ -41,7 +43,16 @@ class FaceService:
         self.det_input_size = det_input_size
         self.min_face_size = min_face_size
         self.align_margin = align_margin
+        self.det_pad_frac = det_pad_frac
         self.detector: any = self._load_detector(detector_path)
+
+        if isinstance(self.model, onnxruntime.InferenceSession):
+            expected = fp.model_input_size(self.model)
+            if expected != self.face_size:
+                logger.warning(
+                    "FACE_SIZE=%s but the model expects %sx%s input; faces will be resized.",
+                    self.face_size, expected, expected,
+                )
 
         os.makedirs(self.output_path, exist_ok=True)
 
@@ -82,15 +93,22 @@ class FaceService:
 
     def _load_detector(self, detector_path: Path | None) -> any:
         """
-        Load the face detector once (called from __init__).
-        By default loads a .pth / .onnx file from DETECTOR_MODEL_NAME, or returns None
-        when it is not set. Override it if your detector comes from a library
-        (InsightFace, OpenCV YuNet, MTCNN, etc.) and configure it with
-        self.det_score_threshold and self.det_input_size.
+        Load the SCRFD face detector (InsightFace `det_10g.onnx`) once, at startup.
+        The path comes from DETECTOR_MODEL_NAME; score threshold and input size come
+        from DET_SCORE_THRESHOLD / DET_INPUT_SIZE. The same detector is used in
+        1-pre-processing.ipynb through `lib.face_pipeline.load_scrfd`.
         """
         if detector_path is None:
-            return None
-        return self._load_model(detector_path)
+            raise ValueError(
+                "DETECTOR_MODEL_NAME is not set: put det_10g.onnx in models/ "
+                "and set DETECTOR_MODEL_NAME=det_10g.onnx in the .env file."
+            )
+        dp = Path(detector_path)
+        if not dp.exists():
+            raise ValueError(f"Detector path does not exist: {detector_path}")
+        if dp.suffix.lower() != ".onnx":
+            raise ValueError(f"Unsupported detector format (expected .onnx): {detector_path}")
+        return fp.load_scrfd(dp, self.det_score_threshold, self.det_input_size)
 
     def _load_image(self, source_path: str) -> np.ndarray:
         image = cv2.imread(source_path)
@@ -112,25 +130,76 @@ class FaceService:
         """
         Each box is (x1, y1, x2, y2) in pixels (InsightFace convention).
         Return a list of tuples with the coordinates of the faces detected in the image.
+        Faces below DET_SCORE_THRESHOLD (applied by the detector) or smaller than
+        MIN_FACE_SIZE pixels on their shortest side are discarded.
+        If nothing is found, it retries with a border of DET_PAD_FRAC around the image,
+        so tight face crops (the face fills the whole picture) are also detected.
         """
-        raise NotImplementedError("Not implemented")
+        height, width = image.shape[:2]
+        boxes: list[tuple[int, int, int, int]] = []
+        for det in fp.detect_with_fallback(self.detector, image, self.det_pad_frac):
+            x1, y1, x2, y2 = (int(round(v)) for v in det.box)
+            x1, y1, x2, y2 = self._clip_xyxy(x1, y1, x2, y2, height, width)
+            if min(x2 - x1, y2 - y1) < self.min_face_size:
+                continue
+            boxes.append((x1, y1, x2, y2))
+        return boxes
 
 
     def align_face(
         self, image: np.ndarray, box: tuple[int, int, int, int]
     ) -> AlignedFace:
         """
-        Crop using box (x1, y1, x2, y2) and run FaceAnalysis on the crop.
-        Return an AlignedFace object.
+        Crop around box (x1, y1, x2, y2) with a relative margin (ALIGN_MARGIN), re-detect
+        the 5 landmarks inside that crop, and warp the face to FACE_SIZE x FACE_SIZE with
+        the ArcFace template. The landmark set is the one whose box overlaps `box` the most.
+        Return an AlignedFace object (keypoints relative to the top-left corner of `box`).
         """
-        raise NotImplementedError("Not implemented")
+        height, width = image.shape[:2]
+        x1, y1, x2, y2 = (int(v) for v in box)
+        mx = int(round((x2 - x1) * self.align_margin))
+        my = int(round((y2 - y1) * self.align_margin))
+        cx1, cy1 = max(0, x1 - mx), max(0, y1 - my)
+        cx2, cy2 = min(width, x2 + mx), min(height, y2 + my)
+        crop = image[cy1:cy2, cx1:cx2]
+
+        target = np.array([x1, y1, x2, y2], dtype=np.float32)
+        best, best_iou = None, 0.0
+        for det in fp.detect_with_fallback(self.detector, crop, self.det_pad_frac):
+            # Caja en coordenadas de la imagen completa, recortada a sus límites (con el borde
+            # de relleno la caja puede salirse un poco de la imagen).
+            shifted = np.array(
+                [max(0, det.box[0] + cx1), max(0, det.box[1] + cy1),
+                 min(width, det.box[2] + cx1), min(height, det.box[3] + cy1)],
+                dtype=np.float32,
+            )
+            iou = self._iou(shifted, target)
+            if iou > best_iou:
+                best, best_iou = det, iou
+        if best is None or best_iou < 0.3:
+            raise ValueError(f"Could not locate facial landmarks for box {box}.")
+
+        kps_full = best.kps + np.array([cx1, cy1], dtype=np.float32)
+        aligned = fp.align_with_landmarks(image, kps_full, self.face_size)
+        kps_rel = kps_full - np.array([x1, y1], dtype=np.float32)
+        return AlignedFace(bbox=(x1, y1, x2, y2), keypoints=kps_rel, image=aligned)
 
     def extract_embedding_from_face(self, face: AlignedFace) -> list[float]:
         """
         Extract embedding from face.
-        Return a list of floats representing the embedding of the face.
+        Return a list of floats representing the embedding of the face (L2-normalized).
         """
-        raise NotImplementedError("Not implemented")
+        if face.embedding is not None:
+            return face.embedding
+        if isinstance(self.model, onnxruntime.InferenceSession):
+            vector = fp.embed_onnx(self.model, face.image)
+        else:
+            tensor = torch.from_numpy(fp.preprocess_aligned_face(face.image, self.face_size))
+            self.model.eval()
+            with torch.no_grad():
+                out = self.model(tensor)
+            vector = fp.l2_normalize(out.cpu().numpy().astype(np.float32).reshape(-1))
+        return vector.astype(float).tolist()
         
     def _cosine(self, a: np.ndarray, b: np.ndarray) -> float:
         denom = np.linalg.norm(a) * np.linalg.norm(b)
