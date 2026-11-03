@@ -67,6 +67,7 @@ face_service = FaceService(
     detector_path=_resolved_detector_path(),
     det_score_threshold=settings.det_score_threshold,
     det_input_size=settings.det_input_size,
+    det_pad_frac=settings.det_pad_frac,
     min_face_size=settings.min_face_size,
     align_margin=settings.align_margin,
 )
