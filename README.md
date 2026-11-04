@@ -1,208 +1,218 @@
-# TP1 - Sistema de Reconocimiento Facial
+# Sistema de Reconocimiento Facial — TUIA
 
-Plantilla base para desarrollar un sistema completo de detección, alineación, extracción de embeddings e identificación/verificación facial.
+**Trabajo Práctico — Computer Vision**
 
-> 📄 El enunciado completo del trabajo práctico está en [ENUNCIADO.md](ENUNCIADO.md).
+Tecnicatura Universitaria en Inteligencia Artificial  
+Facultad de Ciencias Exactas, Ingeniería y Agrimensura — Universidad Nacional de Rosario
 
-## Objetivo del backend
+## Integrantes
 
-Implementar una API asincrónica en Python que permita:
+- Uriel Duvia
+- Laureano Diez
 
-- Registrar identidades (`/insert`)
-- Ejecutar inferencia sobre una imagen (`/predict`)
-- Consultar el estado del procesamiento asincrónico (`/status/{job_id}`)
+## Descripción del proyecto
 
-La API responde `HTTP 202` con un `job_id` y luego permite consultar el resultado con estado:
+El objetivo de este trabajo práctico es desarrollar un sistema de reconocimiento facial capaz de registrar identidades y reconocer personas en imágenes nuevas.
 
-```json
-{
-  "status": "done | inProgress | failed",
-  "link": "url | none"
-}
-```
+Para ello, se implementó un pipeline que comprende el procesamiento de imágenes faciales, el entrenamiento de una red neuronal convolucional propia, la comparación con un modelo preentrenado y la integración del modelo seleccionado en una aplicación web.
 
-## Estructura
+El sistema permite:
 
-```text
-tuia-face-recognition-app/
-├── 1-pre-processing.ipynb       # Parte 1: dataset y preprocesamiento
-├── 2-train.ipynb                # Parte 2: entrenamiento y comparación de modelos
-├── src/
-│   ├── app/
-│   │   └── main.py              # App FastAPI + /health
-│   ├── frontend/                # UI Gradio provista por la cátedra
-│   │   ├── app.py
-│   │   └── gradio_ui.py
-│   └── lib/
-│       ├── api.py               # Endpoints /upload, /insert, /predict, /status, /files
-│       ├── config.py            # Configuración vía .env
-│       ├── schemas.py
-│       ├── services/
-│       │   ├── face_service.py  # ⚠️ Funciones a implementar
-│       │   └── task_manager.py
-│       └── storage/
-│           ├── base.py
-│           ├── embedding_store.py   # Persistencia en JSON
-│           └── pgvector_store.py    # Persistencia en PostgreSQL + pgvector
-├── models/                      # Modelo entrenado (.pth / .onnx), no se versiona
-├── output/                      # Imágenes subidas y resultados, no se versiona
-├── requirements.txt
-├── Dockerfile
-├── Dockerfile.frontend
-├── docker-compose.yml
-├── .env.docker.example
-└── .env.local.example
-```
+- Detectar rostros presentes en una imagen.
+- Alinear los rostros detectados.
+- Extraer embeddings faciales de 512 dimensiones.
+- Registrar identidades en una base de datos.
+- Comparar embeddings mediante similitud coseno.
+- Reconocer personas registradas.
+- Identificar personas desconocidas mediante un umbral de similitud.
 
-# Preparando el ambiente local
+## Tecnologías utilizadas
 
-## Requisitos para trabajar de forma local
+- **Python:** procesamiento e implementación de modelos.
+- **PyTorch:** entrenamiento de la CNN propia.
+- **ONNX Runtime:** inferencia de modelos exportados.
+- **OpenCV:** procesamiento de imágenes.
+- **InsightFace / ArcFace:** modelo preentrenado de reconocimiento facial.
+- **FastAPI:** backend y endpoints REST.
+- **Gradio:** interfaz web.
+- **PostgreSQL + pgvector:** almacenamiento y consulta de embeddings.
+- **Docker Compose:** ejecución de los servicios.
 
-- Python 3.12
-- Docker
+## Estructura del trabajo
 
-## Configurá tu modelo
+El proyecto se divide en tres etapas.
 
-Entrená tu modelo y guardalo dentro de la carpeta `models`. El backend admite modelos con extensión **.pth** (PyTorch, se carga con `torch.load` el modelo completo) o **.onnx** (se carga con `onnxruntime`). Si usan otro framework, expórtenlo a **.onnx**.
+### Parte 1 — Dataset y preprocesamiento
 
-Recordá actualizar la configuración del `.env` correspondiente (`MODEL_NAME`, `EMBEDDING_DIM`, `FACE_SIZE`, `SIMILARITY_THRESHOLD`) para que apunte a tu modelo.
+Notebook: `1-pre-processing.ipynb`
 
-> El backend no arranca si no existe el archivo `models/<MODEL_NAME>`.
+Esta etapa contempla el análisis exploratorio del dataset, control de calidad, detección y alineación facial, clustering, data augmentation y partición de los datos.
 
-Con docker compose, el entorno reinicia la aplicación y actualiza el código automáticamente al detectar cambios. Lo mismo ocurre en local si usan `--reload`.
+**Dataset utilizado:** [Completar nombre, fuente, cantidad de identidades e imágenes]
 
-El reinicio automático puede no funcionar en algunas versiones de Docker Desktop para *Windows*. En ese caso, vuelvan a correr los comandos del siguiente apartado para actualizar el código dentro de Docker.
+**Enlace al dataset o a los datos procesados:** [Completar si corresponde]
 
-## Opción 1 - Corriendo dentro de Docker
+### Parte 2 — Entrenamiento y comparación
 
-### 1. Construí y corré la aplicación
+Notebook: `2-train.ipynb`
 
-Ajustá el archivo **.env.docker.example** a tus necesidades. Luego corré desde la terminal:
+Se desarrolló una CNN residual propia para obtener embeddings faciales y se comparó con InsightFace (ArcFace, w600k_r50).
 
-```bash
-docker compose build
-docker compose up -d
-```
+Se realizaron tres experimentos con la CNN:
 
-## Opción 2 - Configurando el ambiente local
+| Experimento | Configuración | Parámetros | EER en val_open |
+|---|---|---:|---:|
+| A1 | Softmax + GAP | 1,36 M | 0,2773 |
+| A2 | ArcFace + GAP | 1,36 M | 0,2682 |
+| A3 | ArcFace + Flatten | 7,65 M | 0,2283 |
 
-### 1. Instalá uv
+El experimento A3 obtuvo el menor EER de validación y fue seleccionado como la mejor configuración de la CNN propia.
 
-Para usuarios de Linux o Mac:
+### Comparación final de modelos
 
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+Los modelos se evaluaron sobre identidades no utilizadas durante el entrenamiento.
 
-Para usuarios de Windows:
+| Métrica | CNN propia (A3) | InsightFace |
+|---|---:|---:|
+| AUC | 0,8746 | 1,0000 |
+| EER | 0,2126 | 0,0017 |
+| TAR @ FAR=1e-3 | 0,1136 | 0,9975 |
+| Top-1 accuracy | 0,7131 | 1,0000 |
+| Precision macro | 0,4249 | 0,9687 |
+| Recall macro | 0,6363 | 0,9958 |
+| F1 macro | 0,4391 | 0,9813 |
+| Desconocidos rechazados | 0,0414 | 0,9619 |
+| Inferencia CPU (ms/rostro) | 7,61 | 141,81 |
+| Tamaño (MB) | 30,61 | 174,38 |
 
-```bash
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
+**Modelo seleccionado: InsightFace w600k_r50.**
 
-[Documentación de uv](https://docs.astral.sh/uv/getting-started/installation/).
+InsightFace obtuvo mejores resultados de verificación e identificación, especialmente en el reconocimiento de personas desconocidas.
 
-### 2. Configurá un ambiente virtual con Python 3.12
+La CNN propia demostró ventajas de velocidad y tamaño, aunque presentó mayores dificultades para distinguir identidades no registradas.
 
-```bash
-uv venv --python 3.12 .venv
-```
+### Parte 3 — Integración en la aplicación
 
-### 3. Activá el ambiente virtual
+Archivo principal: `src/lib/services/face_service.py`
 
-```bash
-source .venv/bin/activate
-```
+La aplicación integra tres operaciones fundamentales:
 
-### 4. Instalá las dependencias
+1. `detect_faces()`: detecta los rostros presentes en una imagen.
+2. `align_face()`: obtiene los rostros alineados.
+3. `extract_embedding_from_face()`: genera embeddings faciales para su comparación.
 
-```bash
-uv pip install -r requirements.txt
-```
+Los embeddings de las personas registradas se almacenan mediante PostgreSQL con pgvector.
 
-### 5. Iniciá la base de datos
+El frontend permite registrar identidades y reconocer personas en imágenes nuevas.
 
-```bash
-docker compose up postgres -d
-```
+## Modelos y descarga
 
-### 6. Iniciá el frontend
+Los archivos de pesos `.onnx` y `.pth` no se incluyen en el repositorio.
 
-```bash
-cd src
-uvicorn frontend.app:app --port 8080
-```
+**Enlace de descarga:** [AGREGAR ENLACE DE GOOGLE DRIVE]
 
-### 7. Iniciá el backend
+Archivos de reconocimiento y detección necesarios para ejecutar la aplicación:
 
-Ajustá el archivo *.env.local.example* a tus necesidades. Desde la carpeta `src`, en otra terminal:
+- `w600k_r50.onnx`: modelo de reconocimiento facial.
+- [Completar el nombre del archivo del detector configurado en el proyecto]
+
+Se recomienda conservar también el modelo de la CNN propia exportado como `custom_cnn.onnx`, para reproducir las comparaciones.
+
+Los modelos deben colocarse en la carpeta `models/`, respetando los nombres esperados por la configuración.
+
+Los modelos preentrenados de InsightFace están sujetos a sus condiciones de licencia para investigación y uso no comercial.
+
+## Ejecución del proyecto
+
+### Requisitos
+
+- Git
+- Docker Desktop
+- Docker Compose
+
+### 1. Clonar el repositorio
 
 ```bash
-cp ../models/<NOMBRE_DE_TU_MODELO> models/
-cp ../.env.local.example .env
-uvicorn app.main:app --reload --port 8000
+git clone https://github.com/laureanodiez/tuia-face-recognition-app.git
+cd tuia-face-recognition-app
 ```
 
-## Configuración
+### 2. Descargar los modelos
 
-No hardcodeen parámetros: configúrenlos mediante `.env`.
+Descargar los archivos desde el enlace de Google Drive y colocarlos dentro de `models/`.
 
-1. Para la ejecución local, copien `.env.local.example` a `src/.env`.
-2. Ajusten las variables del modelo, los paths y el threshold.
-3. Configuren el detector: `DETECTOR_MODEL_NAME` (opcional, archivo `.pth`/`.onnx` en `models/`), `DET_SCORE_THRESHOLD`, `DET_INPUT_SIZE`, `MIN_FACE_SIZE` y `ALIGN_MARGIN`. Si su detector viene de una librería, sobrescriban `_load_detector` en `face_service.py`.
-4. Opcional (habilitado por defecto): configuren la conexión a PostgreSQL + pgvector (`USE_PGVECTOR`). Con `USE_PGVECTOR=false`, los embeddings se guardan en un archivo JSON (`EMBEDDINGS_PATH`).
+### 3. Configurar las variables de entorno
 
-## Endpoints
+Crear el archivo `.env` a partir del archivo de ejemplo correspondiente a Docker y revisar las variables de configuración.
 
-- Backend: `http://localhost:8000` (documentación Swagger en `http://localhost:8000/docs`)
-- PostgreSQL/pgvector: `localhost:5432`
-- Frontend (provisto por la cátedra): `http://localhost:8080`
+Para el modelo seleccionado en la notebook:
 
-## Pipeline
+```ini
+MODEL_NAME=w600k_r50.onnx
+EMBEDDING_DIM=512
+FACE_SIZE=112
+SIMILARITY_METRIC=cosine
+SIMILARITY_THRESHOLD=0.220
+```
 
-### Provisto por la cátedra
+También se deben configurar las rutas del detector y la conexión a PostgreSQL según los archivos de ejemplo del proyecto.
 
-- API asincrónica (`/upload`, `/insert`, `/predict`, `/status`) y manejo de jobs.
-- Carga del modelo (`.pth` / `.onnx`) desde `models/`.
-- Búsqueda por similitud configurable (`cosine` o `l2`) e identificación (`identify`).
-- Manejo de desconocidos con `SIMILARITY_THRESHOLD`.
-- Persistencia configurable en JSON o en PostgreSQL + pgvector (`USE_PGVECTOR`).
-- Frontend para registrar identidades, predecir y visualizar los resultados (cajas, etiquetas y keypoints).
+### 4. Construir y levantar los contenedores
 
-### A implementar por el grupo (`src/lib/services/face_service.py`)
+```bash
+docker compose up -d --build
+```
 
-Estas funciones hoy lanzan `NotImplementedError`:
+### 5. Acceder a la aplicación
 
-1. `detect_faces`: detección de rostros. Devuelve las cajas `(x1, y1, x2, y2)`.
-2. `align_face`: alineación con landmarks y normalización a `FACE_SIZE`. Devuelve un `AlignedFace`.
-3. `extract_embedding_from_face`: extracción del embedding de dimensión `EMBEDDING_DIM`, normalizado L2.
+Una vez iniciados los servicios:
 
-Ver detalles y recomendaciones en [ENUNCIADO.md](ENUNCIADO.md#4-parte-3--integración-en-la-aplicación).
+- **Frontend:** http://127.0.0.1:8080
+- **Backend (Swagger):** http://127.0.0.1:8000/docs
+- **Health:** http://127.0.0.1:8000/health
 
-## Modelo y fine-tuning
+### 6. Verificar los contenedores
 
-Completar en la entrega final:
+```bash
+docker compose ps
+```
 
-- Modelo elegido y link público de descarga
-- Arquitectura (ResNet, EfficientNet, ViT, CNN custom, etc.)
-- Justificación técnica y trade-offs frente al modelo descartado
-- Hiperparámetros y proceso de entrenamiento / fine-tuning
-- Umbral de similitud elegido y cómo se calibró
-- Análisis de errores (FP/FN)
-- Métricas: accuracy, precision, recall, AUC/EER
+Para consultar los logs del backend:
 
-## Dataset
+```bash
+docker compose logs backend --tail=100
+```
 
-Documentar:
+## Pruebas funcionales
 
-- Fuente de las imágenes (propias y/o públicas) y su licencia
-- Cantidad por clase/persona
-- Balance de clases
-- Variaciones (iluminación, pose, expresión)
-- Reglas de filtrado y calidad
+Se comprobó el funcionamiento de la aplicación mediante el registro de varias imágenes de una identidad y su posterior reconocimiento en una fotografía diferente.
 
-## Notas importantes
+Para reproducir la validación completa se recomienda probar:
 
-- Para usar `pgvector`, levanten `postgres` y definan `USE_PGVECTOR=true` en `.env`.
-- Si cambian `EMBEDDING_DIM`, la tabla `embeddings` se recrea y se borran los registros previos.
-- Los modelos (`*.pth`, `*.onnx`) y los datos no se versionan (ver `.gitignore`). Coloquen el modelo entrenado en `models/` y súbanlo a un link **público de solo lectura** para que los docentes puedan descargarlo.
+- Registro de varias identidades.
+- Reconocimiento con imágenes diferentes de las utilizadas durante el registro.
+- Identificación de múltiples rostros.
+- Rechazo de identidades desconocidas.
+- Imágenes sin rostros y registros con más de un rostro.
+
+## Limitaciones y posibles mejoras
+
+La CNN propia presenta limitaciones para identificar correctamente personas desconocidas. En la evaluación open-set rechazó correctamente el 4,14 % de las muestras desconocidas.
+
+Entre las posibles mejoras se encuentran aumentar la diversidad de los datos de entrenamiento, explorar nuevas arquitecturas y evaluar distintos criterios de calibración del umbral de similitud.
+
+Los resultados reportados corresponden al dataset y protocolo utilizados en este trabajo y no garantizan el mismo rendimiento en otros escenarios.
+
+## Consideraciones de privacidad
+
+Las imágenes faciales y sus embeddings constituyen información biométrica sensible.
+
+Se recomienda utilizar imágenes con consentimiento de sus titulares y evitar publicar datos personales, fotografías de terceros, bases de datos de rostros o archivos de configuración que contengan secretos.
+
+## Referencias
+
+- [InsightFace](https://github.com/deepinsight/insightface)
+- [ArcFace — Deng et al., 2019](https://arxiv.org/abs/1801.07698)
+- [PyTorch](https://pytorch.org/)
+- [ONNX Runtime](https://onnxruntime.ai/)
+- [pgvector](https://github.com/pgvector/pgvector)
