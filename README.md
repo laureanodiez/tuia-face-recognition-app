@@ -109,12 +109,11 @@ El frontend permite registrar identidades y reconocer personas en imágenes nuev
 
 Los archivos de pesos `.onnx` y `.pth` no se incluyen en el repositorio.
 
-**Enlace de descarga:** [AGREGAR ENLACE DE GOOGLE DRIVE]
-
+**Enlace de descarga:** https://drive.google.com/drive/folders/11dP6O0u9go8eXXwyO7UdAEzoUM_bPg1x?usp=sharing
 Archivos de reconocimiento y detección necesarios para ejecutar la aplicación:
 
 - `w600k_r50.onnx`: modelo de reconocimiento facial.
-- [Completar el nombre del archivo del detector configurado en el proyecto]
+- `det_10g.onnx` : modelo de deteccion. 
 
 Se recomienda conservar también el modelo de la CNN propia exportado como `custom_cnn.onnx`, para reproducir las comparaciones.
 
